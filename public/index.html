@@ -7,6 +7,7 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="stylesheet" href="/styles.css" />
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
   <!-- Top Navigation & Status Bar -->
@@ -275,12 +276,12 @@
         </div>
 
         <!-- Network Adapter / URL Mode Selector -->
-        <div class="form-row">
+        <div id="lanIpRow" class="form-row">
           <label style="font-size: 0.75rem; color: var(--text-muted);">Wi-Fi IP:</label>
           <select id="selectLanIp" class="select-input" style="width: auto; flex: 1;"></select>
         </div>
 
-        <div class="form-row">
+        <div id="qrProtocolRow" class="form-row">
           <label style="font-size: 0.75rem; color: var(--text-muted);">QR Mode:</label>
           <select id="selectQrProtocol" class="select-input" style="width: auto; flex: 1;">
             <option value="http" selected>HTTP — Instant Viewer / File Cast (No Cert Prompt)</option>

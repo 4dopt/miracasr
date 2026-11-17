@@ -55,6 +55,8 @@
   const pinInput = document.getElementById('pinInput');
   const btnJoinPin = document.getElementById('btnJoinPin');
   const btnNewPin = document.getElementById('btnNewPin');
+  const lanIpRow = document.getElementById('lanIpRow');
+  const qrProtocolRow = document.getElementById('qrProtocolRow');
   const selectLanIp = document.getElementById('selectLanIp');
   const selectQrProtocol = document.getElementById('selectQrProtocol');
   const qrImage = document.getElementById('qrImage');
@@ -75,14 +77,27 @@
   const toastContainer = document.getElementById('toastContainer');
 
   // Application State
+  let backendMode = 'detecting'; // 'local-ws' | 'cloud-p2p'
   let ws = null;
-  let myPeerId = null;
+  let myPeerId = `peer_${Math.random().toString(36).slice(2, 10)}`;
   let currentPin = null;
   let serverInfo = null;
   let isBroadcaster = false;
   let activeStreamMode = null; // 'webrtc' | 'canvas'
   let localMediaStream = null;
   let canvasInterval = null;
+
+  // Cloud P2P (Netlify / Static Host) PeerJS State
+  let peerJsInstance = null;
+  let peerJsClientConn = null;
+  let isCloudRoomHost = false;
+  const cloudHubRoom = {
+    pin: null,
+    broadcasterId: null,
+    broadcasterName: null,
+    streamMode: null,
+    peers: new Map(), // peerId -> { id, name, deviceType, role, conn (null for host itself) }
+  };
 
   // WebRTC PeerConnections: Map<remotePeerId, RTCPeerConnection>
   const peerConnections = new Map();
@@ -97,11 +112,15 @@
   let isMirrored = false;
   let isPointerMode = false;
 
-  // Remote Laser Pointers: Map<peerId, { x, y, name, color, updatedAt, click }>
+  // Remote Laser Pointers: Map<peerId, { x, y, name, updatedAt, click }>
   const remotePointers = new Map();
 
   const RTC_CONFIG = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+    ],
   };
 
   function showToast(message) {
@@ -133,7 +152,6 @@
     if (currentPin) joinRoom(currentPin);
   });
 
-  // Check if client is on non-localhost HTTP (so we can show 1-tap HTTPS upgrade for mobile screen/camera capture)
   function checkSecureContextNotice() {
     const isLocalhost =
       location.hostname === 'localhost' || location.hostname === '127.0.0.1';
@@ -155,45 +173,86 @@
     btnSwitchToHttps.href = `https://${location.hostname}:${httpsPort}/${pinParam}`;
   }
 
-  // Fetch Server & LAN Info
-  async function loadServerInfo() {
+  // ============================================================================
+  // DUAL-ENGINE INITIALIZATION: LOCAL NODE SERVER vs NETLIFY CLOUD P2P
+  // ============================================================================
+  async function initializeBackend() {
     try {
-      const res = await fetch('/api/info');
-      serverInfo = await res.json();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch('/api/info', { signal: controller.signal });
+      clearTimeout(timeout);
 
-      selectLanIp.innerHTML = '';
-      if (serverInfo.addresses && serverInfo.addresses.length > 0) {
-        serverInfo.addresses.forEach((addr) => {
-          const opt = document.createElement('option');
-          opt.value = addr.address;
-          opt.textContent = `${addr.address} (${addr.name})`;
-          selectLanIp.appendChild(opt);
-        });
-      } else {
-        const opt = document.createElement('option');
-        opt.value = location.hostname;
-        opt.textContent = location.hostname;
-        selectLanIp.appendChild(opt);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        serverInfo = await res.json();
+        if (serverInfo && serverInfo.httpPort) {
+          backendMode = 'local-ws';
+          setupLocalServerUi();
+          connectLocalWebSocket();
+          return;
+        }
       }
-
-      updatePairingQrAndUrl();
-      updateHttpsUpgradeLink();
-      renderLobbyRooms(serverInfo.rooms || []);
-    } catch (err) {
-      console.error('Failed to fetch server info:', err);
+    } catch (_) {
+      // /api/info not available -> running on Netlify or static host
     }
+
+    // Fallback to Cloud P2P Mode (Netlify / Static Hosting)
+    backendMode = 'cloud-p2p';
+    setupCloudP2pUi();
+    const params = new URLSearchParams(location.search);
+    const initialPin =
+      params.get('pin') || String(Math.floor(1000 + Math.random() * 9000));
+    joinRoom(initialPin);
+  }
+
+  function setupLocalServerUi() {
+    selectLanIp.innerHTML = '';
+    if (serverInfo.addresses && serverInfo.addresses.length > 0) {
+      serverInfo.addresses.forEach((addr) => {
+        const opt = document.createElement('option');
+        opt.value = addr.address;
+        opt.textContent = `${addr.address} (${addr.name})`;
+        selectLanIp.appendChild(opt);
+      });
+    } else {
+      const opt = document.createElement('option');
+      opt.value = location.hostname;
+      opt.textContent = location.hostname;
+      selectLanIp.appendChild(opt);
+    }
+
+    updatePairingQrAndUrl();
+    updateHttpsUpgradeLink();
+    renderLobbyRooms(serverInfo.rooms || []);
+  }
+
+  function setupCloudP2pUi() {
+    if (lanIpRow) lanIpRow.classList.add('hidden');
+    if (qrProtocolRow) qrProtocolRow.classList.add('hidden');
+    winMiracastCard.classList.add('hidden');
+    httpsNoticeBanner.classList.add('hidden');
+    lobbyRoomList.innerHTML = `<div class="card-desc">Cloud P2P Mode active — enter any 4-digit PIN above or scan the QR code to pair devices anywhere.</div>`;
   }
 
   function updatePairingQrAndUrl() {
-    if (!serverInfo) return;
-    const ip = selectLanIp.value || serverInfo.primaryIp || location.hostname;
-    const proto = selectQrProtocol.value || 'http';
-    const port = proto === 'https' ? serverInfo.httpsPort : serverInfo.httpPort;
     const pinSuffix = currentPin ? `?pin=${encodeURIComponent(currentPin)}` : '';
-    const fullUrl = `${proto}://${ip}:${port}/${pinSuffix}`;
 
-    shareUrlText.textContent = fullUrl;
-    qrImage.src = `/api/qr?url=${encodeURIComponent(fullUrl)}`;
+    if (backendMode === 'local-ws' && serverInfo) {
+      const ip = selectLanIp.value || serverInfo.primaryIp || location.hostname;
+      const proto = selectQrProtocol.value || 'http';
+      const port = proto === 'https' ? serverInfo.httpsPort : serverInfo.httpPort;
+      const fullUrl = `${proto}://${ip}:${port}/${pinSuffix}`;
+
+      shareUrlText.textContent = fullUrl;
+      qrImage.src = `/api/qr?url=${encodeURIComponent(fullUrl)}`;
+    } else {
+      const fullUrl = `${location.origin}${location.pathname}${pinSuffix}`;
+      shareUrlText.textContent = fullUrl;
+      qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(
+        fullUrl
+      )}`;
+    }
   }
 
   selectLanIp.addEventListener('change', updatePairingQrAndUrl);
@@ -208,8 +267,10 @@
     }
   });
 
-  // WebSocket Connection & Signaling
-  function connectWebSocket() {
+  // ============================================================================
+  // SIGNALING TRANSPORT LAYER (Supports both Local WS and Netlify PeerJS P2P)
+  // ============================================================================
+  function connectLocalWebSocket() {
     const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${wsProto}//${location.host}`);
 
@@ -235,23 +296,382 @@
     ws.addEventListener('close', () => {
       connDot.className = 'status-dot';
       connStatusText.textContent = 'Reconnecting...';
-      setTimeout(connectWebSocket, 1800);
+      setTimeout(connectLocalWebSocket, 1800);
     });
   }
 
   function sendWs(payload) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
+    if (backendMode === 'local-ws') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    } else if (backendMode === 'cloud-p2p') {
+      sendCloudP2pSignal(payload);
     }
   }
 
   function joinRoom(pin) {
-    sendWs({
-      type: 'create-or-join',
-      pin: pin ? String(pin).trim() : '',
-      name: deviceNameInput.value.trim() || deviceInfo.name,
-      deviceType: deviceInfo.type,
+    const cleanPin =
+      pin && /^\d{4,6}$/.test(String(pin).trim())
+        ? String(pin).trim()
+        : String(Math.floor(1000 + Math.random() * 9000));
+
+    if (backendMode === 'local-ws') {
+      sendWs({
+        type: 'create-or-join',
+        pin: cleanPin,
+        name: deviceNameInput.value.trim() || deviceInfo.name,
+        deviceType: deviceInfo.type,
+      });
+    } else if (backendMode === 'cloud-p2p') {
+      joinCloudP2pRoom(cleanPin);
+    }
+  }
+
+  // ============================================================================
+  // NETLIFY / CLOUD P2P ROOM COORDINATOR (PeerJS Deterministic PIN Hub)
+  // ============================================================================
+  function cleanupCloudPeer() {
+    if (peerJsClientConn) {
+      try {
+        peerJsClientConn.close();
+      } catch (_) {}
+      peerJsClientConn = null;
+    }
+    if (peerJsInstance) {
+      try {
+        peerJsInstance.destroy();
+      } catch (_) {}
+      peerJsInstance = null;
+    }
+    isCloudRoomHost = false;
+    cloudHubRoom.peers.clear();
+    cloudHubRoom.broadcasterId = null;
+    cloudHubRoom.broadcasterName = null;
+    cloudHubRoom.streamMode = null;
+  }
+
+  function joinCloudP2pRoom(pin) {
+    if (typeof window.Peer !== 'function') {
+      connStatusText.textContent = 'Loading P2P Engine...';
+      setTimeout(() => joinCloudP2pRoom(pin), 500);
+      return;
+    }
+
+    cleanupCloudPeer();
+    connDot.className = 'status-dot';
+    connStatusText.textContent = `Joining PIN ${pin}...`;
+
+    const hubPeerId = `miracasr-hub-v1-${pin}`;
+    const myName = deviceNameInput.value.trim() || deviceInfo.name;
+
+    // Attempt to become the Room Host for this 4-digit PIN
+    const candidateHost = new window.Peer(hubPeerId, { config: RTC_CONFIG });
+
+    candidateHost.on('open', () => {
+      // We are the first device in this PIN room -> act as Room Host
+      peerJsInstance = candidateHost;
+      isCloudRoomHost = true;
+      myPeerId = hubPeerId;
+      cloudHubRoom.pin = pin;
+
+      cloudHubRoom.peers.set(myPeerId, {
+        id: myPeerId,
+        name: myName,
+        deviceType: deviceInfo.type,
+        role: 'viewer',
+        conn: null,
+      });
+
+      connDot.className = 'status-dot online';
+      connStatusText.textContent = 'Cloud P2P Ready';
+
+      handleSignalingMessage({
+        type: 'joined-room',
+        pin,
+        peerId: myPeerId,
+        broadcasterId: null,
+        broadcasterName: null,
+        streamMode: null,
+      });
+
+      broadcastCloudHubState();
+
+      // Accept incoming PeerJS DataConnections from other devices joining this PIN
+      candidateHost.on('connection', (conn) => {
+        setupCloudHostClientConnection(conn);
+      });
     });
+
+    candidateHost.on('error', (err) => {
+      if (err && err.type === 'unavailable-id') {
+        // Another device is already hosting this PIN room -> connect to it as a Client!
+        try {
+          candidateHost.destroy();
+        } catch (_) {}
+        connectAsCloudRoomClient(pin, hubPeerId);
+      } else {
+        console.warn('PeerJS notice:', err);
+      }
+    });
+  }
+
+  function connectAsCloudRoomClient(pin, hubPeerId) {
+    isCloudRoomHost = false;
+    const clientPeer = new window.Peer({ config: RTC_CONFIG });
+    peerJsInstance = clientPeer;
+
+    clientPeer.on('open', (assignedId) => {
+      myPeerId = assignedId;
+      const conn = clientPeer.connect(hubPeerId, { reliable: true });
+      peerJsClientConn = conn;
+
+      conn.on('open', () => {
+        connDot.className = 'status-dot online';
+        connStatusText.textContent = 'Cloud P2P Connected';
+
+        conn.send({
+          type: 'create-or-join',
+          pin,
+          name: deviceNameInput.value.trim() || deviceInfo.name,
+          deviceType: deviceInfo.type,
+        });
+      });
+
+      conn.on('data', (data) => {
+        if (data && typeof data === 'object') {
+          handleSignalingMessage(data);
+        }
+      });
+
+      conn.on('close', () => {
+        showToast('Room host disconnected — re-establishing room...');
+        setTimeout(() => joinCloudP2pRoom(pin), 1000);
+      });
+    });
+  }
+
+  function setupCloudHostClientConnection(conn) {
+    const remoteId = conn.peer;
+
+    conn.on('data', (msg) => {
+      if (!msg || typeof msg !== 'object') return;
+      processCloudHubMessage(remoteId, msg, conn);
+    });
+
+    conn.on('close', () => {
+      cloudHubRoom.peers.delete(remoteId);
+      if (cloudHubRoom.broadcasterId === remoteId) {
+        cloudHubRoom.broadcasterId = null;
+        cloudHubRoom.broadcasterName = null;
+        cloudHubRoom.streamMode = null;
+        sendToAllCloudPeers(null, {
+          type: 'broadcaster-stopped',
+          broadcasterId: remoteId,
+        });
+      }
+      broadcastCloudHubState();
+    });
+  }
+
+  function sendCloudP2pSignal(payload) {
+    if (isCloudRoomHost) {
+      processCloudHubMessage(myPeerId, payload, null);
+    } else if (peerJsClientConn && peerJsClientConn.open) {
+      peerJsClientConn.send(payload);
+    }
+  }
+
+  function sendToCloudPeer(targetId, payload) {
+    if (targetId === myPeerId) {
+      handleSignalingMessage(payload);
+      return;
+    }
+    const peer = cloudHubRoom.peers.get(targetId);
+    if (peer && peer.conn && peer.conn.open) {
+      peer.conn.send(payload);
+    }
+  }
+
+  function sendToAllCloudPeers(excludeId, payload) {
+    for (const [id, peer] of cloudHubRoom.peers.entries()) {
+      if (id === excludeId) continue;
+      sendToCloudPeer(id, payload);
+    }
+  }
+
+  function broadcastCloudHubState() {
+    const peersList = Array.from(cloudHubRoom.peers.values()).map((p) => ({
+      id: p.id,
+      name: p.name,
+      deviceType: p.deviceType,
+      role: p.role,
+    }));
+
+    sendToAllCloudPeers(null, {
+      type: 'room-state',
+      pin: cloudHubRoom.pin,
+      broadcasterId: cloudHubRoom.broadcasterId,
+      broadcasterName: cloudHubRoom.broadcasterName,
+      streamMode: cloudHubRoom.streamMode,
+      peers: peersList,
+    });
+  }
+
+  function processCloudHubMessage(senderId, msg, senderConn) {
+    switch (msg.type) {
+      case 'create-or-join': {
+        const peerObj = {
+          id: senderId,
+          name: (msg.name || 'Wireless Device').slice(0, 40),
+          deviceType: msg.deviceType || 'desktop',
+          role: 'viewer',
+          conn: senderConn,
+        };
+        cloudHubRoom.peers.set(senderId, peerObj);
+
+        sendToCloudPeer(senderId, {
+          type: 'joined-room',
+          pin: cloudHubRoom.pin,
+          peerId: senderId,
+          broadcasterId: cloudHubRoom.broadcasterId,
+          broadcasterName: cloudHubRoom.broadcasterName,
+          streamMode: cloudHubRoom.streamMode,
+        });
+
+        if (cloudHubRoom.broadcasterId && cloudHubRoom.broadcasterId !== senderId) {
+          sendToCloudPeer(cloudHubRoom.broadcasterId, {
+            type: 'viewer-ready',
+            viewerId: senderId,
+            viewerName: peerObj.name,
+            viewerDeviceType: peerObj.deviceType,
+          });
+        }
+
+        broadcastCloudHubState();
+        break;
+      }
+
+      case 'start-broadcast': {
+        const sender = cloudHubRoom.peers.get(senderId);
+        if (!sender) break;
+
+        if (cloudHubRoom.broadcasterId && cloudHubRoom.broadcasterId !== senderId) {
+          const prev = cloudHubRoom.peers.get(cloudHubRoom.broadcasterId);
+          if (prev) prev.role = 'viewer';
+          sendToCloudPeer(cloudHubRoom.broadcasterId, {
+            type: 'broadcast-superseded',
+            byName: sender.name,
+          });
+        }
+
+        sender.role = 'broadcaster';
+        cloudHubRoom.broadcasterId = senderId;
+        cloudHubRoom.broadcasterName = sender.name;
+        cloudHubRoom.streamMode = msg.streamMode || 'webrtc';
+
+        broadcastCloudHubState();
+
+        for (const [otherId, otherPeer] of cloudHubRoom.peers.entries()) {
+          if (otherId !== senderId) {
+            otherPeer.role = 'viewer';
+            sendToCloudPeer(otherId, {
+              type: 'broadcaster-started',
+              broadcasterId: senderId,
+              broadcasterName: sender.name,
+              streamMode: cloudHubRoom.streamMode,
+            });
+            sendToCloudPeer(senderId, {
+              type: 'viewer-ready',
+              viewerId: otherId,
+              viewerName: otherPeer.name,
+              viewerDeviceType: otherPeer.deviceType,
+            });
+          }
+        }
+        break;
+      }
+
+      case 'stop-broadcast': {
+        if (cloudHubRoom.broadcasterId === senderId) {
+          const sender = cloudHubRoom.peers.get(senderId);
+          if (sender) sender.role = 'viewer';
+          cloudHubRoom.broadcasterId = null;
+          cloudHubRoom.broadcasterName = null;
+          cloudHubRoom.streamMode = null;
+
+          sendToAllCloudPeers(senderId, {
+            type: 'broadcaster-stopped',
+            broadcasterId: senderId,
+          });
+          broadcastCloudHubState();
+        }
+        break;
+      }
+
+      case 'webrtc-signal': {
+        const sender = cloudHubRoom.peers.get(senderId);
+        sendToCloudPeer(msg.targetId, {
+          type: 'webrtc-signal',
+          fromId: senderId,
+          fromName: sender ? sender.name : 'Peer',
+          signal: msg.signal,
+        });
+        break;
+      }
+
+      case 'request-stream': {
+        const viewer = cloudHubRoom.peers.get(senderId);
+        if (cloudHubRoom.broadcasterId && viewer) {
+          sendToCloudPeer(cloudHubRoom.broadcasterId, {
+            type: 'viewer-ready',
+            viewerId: senderId,
+            viewerName: viewer.name,
+            viewerDeviceType: viewer.deviceType,
+          });
+        }
+        break;
+      }
+
+      case 'canvas-frame': {
+        if (cloudHubRoom.broadcasterId !== senderId) break;
+        sendToAllCloudPeers(senderId, {
+          type: 'canvas-frame',
+          fromId: senderId,
+          dataUrl: msg.dataUrl,
+          width: msg.width,
+          height: msg.height,
+          timestamp: msg.timestamp,
+        });
+        break;
+      }
+
+      case 'pointer-event': {
+        const sender = cloudHubRoom.peers.get(senderId);
+        sendToAllCloudPeers(senderId, {
+          type: 'pointer-event',
+          fromId: senderId,
+          fromName: sender ? sender.name : 'Viewer',
+          x: msg.x,
+          y: msg.y,
+          active: Boolean(msg.active),
+          click: Boolean(msg.click),
+        });
+        break;
+      }
+
+      case 'clipboard-share': {
+        const sender = cloudHubRoom.peers.get(senderId);
+        sendToAllCloudPeers(senderId, {
+          type: 'clipboard-share',
+          fromId: senderId,
+          fromName: sender ? sender.name : 'Device',
+          text: String(msg.text || '').slice(0, 10000),
+          timestamp: Date.now(),
+        });
+        break;
+      }
+    }
   }
 
   btnJoinPin.addEventListener('click', () => {
@@ -319,7 +739,6 @@
       }
 
       case 'viewer-ready': {
-        // A viewer joined or requested the stream while we are broadcasting
         if (isBroadcaster && activeStreamMode === 'webrtc' && localMediaStream) {
           createOfferForViewer(msg.viewerId);
         }
@@ -366,7 +785,7 @@
           hudStatsBadge.classList.remove('hidden');
           hudResolution.textContent = `${msg.width}x${msg.height}`;
           hudFps.textContent = 'Live Frame';
-          hudBitrate.textContent = 'WS Relay';
+          hudBitrate.textContent = 'Relay';
         }
         break;
       }
@@ -421,6 +840,7 @@
 
   // Render Active Wi-Fi Rooms for 1-Tap Discovery
   function renderLobbyRooms(rooms) {
+    if (backendMode === 'cloud-p2p') return;
     lobbyRoomList.innerHTML = '';
     if (!rooms || rooms.length === 0) {
       lobbyRoomList.innerHTML = `<div class="card-desc">No active rooms yet.</div>`;
@@ -475,12 +895,11 @@
       }
       const sender = pc.addTrack(track, localMediaStream);
 
-      // Boost maximum video bitrate for crisp local Wi-Fi mirroring
       if (track.kind === 'video' && sender.getParameters) {
         try {
           const params = sender.getParameters();
           if (!params.encodings) params.encodings = [{}];
-          params.encodings[0].maxBitrate = 10_000_000; // 10 Mbps over local LAN
+          params.encodings[0].maxBitrate = 10_000_000;
           params.encodings[0].maxFramerate = 60;
           sender.setParameters(params).catch(() => {});
         } catch (_) {}
@@ -492,7 +911,7 @@
         sendWs({
           type: 'webrtc-signal',
           targetId: viewerId,
-          signal: { type: 'ice-candidate', candidate: e.candidate },
+          signal: { type: 'ice-candidate', candidate: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate },
         });
       }
     };
@@ -503,7 +922,10 @@
     sendWs({
       type: 'webrtc-signal',
       targetId: viewerId,
-      signal: { type: 'offer', sdp: pc.localDescription },
+      signal: {
+        type: 'offer',
+        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+      },
     });
   }
 
@@ -511,7 +933,6 @@
     if (!signal) return;
 
     if (signal.type === 'offer') {
-      // We are a Viewer receiving an offer from the Broadcaster
       if (viewerPc) {
         viewerPc.close();
       }
@@ -529,7 +950,7 @@
           sendWs({
             type: 'webrtc-signal',
             targetId: fromId,
-            signal: { type: 'ice-candidate', candidate: e.candidate },
+            signal: { type: 'ice-candidate', candidate: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate },
           });
         }
       };
@@ -541,7 +962,10 @@
       sendWs({
         type: 'webrtc-signal',
         targetId: fromId,
-        signal: { type: 'answer', sdp: viewerPc.localDescription },
+        signal: {
+          type: 'answer',
+          sdp: { type: viewerPc.localDescription.type, sdp: viewerPc.localDescription.sdp },
+        },
       });
       startTelemetryPolling(viewerPc);
     } else if (signal.type === 'answer') {
@@ -567,7 +991,6 @@
     remoteVideo.srcObject = stream;
     remoteVideo.muted = false;
     remoteVideo.play().catch(() => {
-      // Browser autoplay policy blocked unmuted playback; fallback to muted + toast
       remoteVideo.muted = true;
       remoteVideo.play().catch(() => {});
       updateMuteButtonLabel();
@@ -691,7 +1114,7 @@
 
   async function startCameraBroadcast() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showToast('Please open the Secure HTTPS Cast link to unlock Camera & Mic on this device.');
+      showToast('Please open an HTTPS link to unlock Camera & Mic on this device.');
       httpsNoticeBanner.classList.remove('hidden');
       return;
     }
@@ -717,7 +1140,6 @@
     isBroadcaster = true;
     activeStreamMode = 'webrtc';
 
-    // Show local preview on stage (muted locally to prevent echo)
     stagePlaceholder.classList.add('hidden');
     remoteCanvasImg.classList.add('hidden');
     remoteVideo.classList.remove('hidden');
@@ -731,7 +1153,6 @@
     btnStopBroadcastTop.classList.remove('hidden');
     connDot.className = 'status-dot live';
 
-    // Stop broadcast automatically if user clicks browser's native "Stop sharing" bar
     const [videoTrack] = stream.getVideoTracks();
     if (videoTrack) {
       videoTrack.addEventListener('ended', () => {
@@ -747,7 +1168,6 @@
     showToast(`Started ${label} to Room ${currentPin}`);
   }
 
-  // Mode 3: Local Video or Photo File Cast (Works on ALL phones even over plain HTTP!)
   btnCastFileTrigger.addEventListener('click', () => {
     fileCastInput.click();
   });
@@ -794,7 +1214,6 @@
     }
   });
 
-  // Mode 4: Interactive Whiteboard & Live 60FPS Test Pattern
   let wbDrawing = false;
   let wbLastX = 0;
   let wbLastY = 0;
@@ -810,7 +1229,6 @@
 
     startCanvasOrStreamBroadcast('Live Whiteboard & Test Stream');
 
-    // Render live clock & animated pulse badge in corner so viewers immediately see 30/60fps motion
     const tick = () => {
       if (!isBroadcaster) return;
       ctx.save();
@@ -909,7 +1327,6 @@
     isBroadcaster = true;
     btnStopBroadcastTop.classList.remove('hidden');
 
-    // Use WebRTC captureStream if supported, plus WebSocket frame relay so all clients receive smoothly
     if (typeof localCastCanvas.captureStream === 'function') {
       const stream = localCastCanvas.captureStream(30);
       if (
@@ -927,11 +1344,9 @@
       sendWs({ type: 'start-broadcast', streamMode: 'canvas' });
     }
 
-    // Also run lightweight frame relay for any fallback viewers
     if (canvasInterval) clearInterval(canvasInterval);
     canvasInterval = setInterval(() => {
       if (!isBroadcaster) return;
-      // Only send WS frame if room is in canvas mode
       if (activeStreamMode === 'canvas') {
         const dataUrl = localCastCanvas.toDataURL('image/jpeg', 0.72);
         sendWs({
@@ -1248,6 +1663,5 @@
 
   // Initialize App
   checkSecureContextNotice();
-  loadServerInfo();
-  connectWebSocket();
+  initializeBackend();
 })();
