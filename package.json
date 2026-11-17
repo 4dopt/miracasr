@@ -1,0 +1,22 @@
+{
+  "name": "miracasr",
+  "version": "1.0.0",
+  "description": "Free cross-platform Phone <-> PC wireless screen mirroring and display app over local Wi-Fi (WebRTC + QR/PIN pairing)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "miracast",
+    "screen-mirroring",
+    "webrtc",
+    "wireless-display",
+    "pwa"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "selfsigned": "^5.1.1",
+    "ws": "^8.18.0"
+  }
+}

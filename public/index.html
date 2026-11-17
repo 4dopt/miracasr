@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>MiraCastR — Free Wireless Screen Mirroring & Display Hub</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Top Navigation & Status Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="/icon.svg" alt="MiraCastR" class="brand-icon" />
+      <div>
+        <div class="brand-title">
+          MiraCastR <span class="badge-free">100% Free &amp; Local</span>
+        </div>
+        <div class="brand-subtitle">Cross-Platform Phone &harr; PC Wireless Display over Wi-Fi</div>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <div class="status-pill" title="Signaling & Room Connection Status">
+        <span id="connDot" class="status-dot"></span>
+        <span id="connStatusText">Connecting...</span>
+      </div>
+
+      <div class="status-pill">
+        <span>Room PIN:</span>
+        <strong id="headerRoomPin" style="color: #38bdf8; font-family: monospace; font-size: 0.95rem;">----</strong>
+      </div>
+
+      <input
+        id="deviceNameInput"
+        type="text"
+        class="device-name-input"
+        placeholder="Device Name"
+        title="Your device display name in the room"
+      />
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="workspace">
+    <!-- Left Column: Live Display Stage + Broadcast Controls -->
+    <div class="stage-column">
+      <!-- Wireless Receiver / Display Stage Card -->
+      <section class="card stage-card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">
+              <span>📺</span> Wireless Display Stage
+              <span id="streamSourceBadge" class="role-tag viewer">Ready to Receive</span>
+            </h2>
+          </div>
+          <div class="toolbar-group">
+            <button id="btnReconnectStream" class="btn" title="Refresh / Re-sync Stream">
+              🔄 Resync
+            </button>
+            <button id="btnStopBroadcastTop" class="btn btn-danger hidden">
+              ⏹ Stop Casting
+            </button>
+          </div>
+        </div>
+
+        <!-- Video / Canvas Viewport -->
+        <div id="stageViewport" class="stage-viewport">
+          <!-- Top HUD Overlay (Telemetry + Active Broadcaster) -->
+          <div class="stage-hud-top">
+            <div id="hudBroadcasterBadge" class="hud-badge">
+              <span>📡</span> <span id="hudBroadcasterText">Waiting for caster...</span>
+            </div>
+            <div id="hudStatsBadge" class="hud-badge hidden">
+              <span id="hudResolution">--x--</span> &bull;
+              <span id="hudFps">-- fps</span> &bull;
+              <span id="hudBitrate">-- Mbps</span>
+            </div>
+          </div>
+
+          <!-- Idle Placeholder when no stream is active -->
+          <div id="stagePlaceholder" class="stage-placeholder">
+            <div class="placeholder-pin-box">
+              <span class="placeholder-pin-label">Room Pairing PIN</span>
+              <span id="stagePinValue" class="placeholder-pin-value">----</span>
+            </div>
+            <h3 style="font-size: 1.1rem; font-weight: 650;">Ready to Mirror Screen or Camera</h3>
+            <p class="card-desc">
+              Scan the QR code on the right with your phone, or enter this 4-digit PIN on another device on the same Wi-Fi to mirror <strong>PC &rarr; Phone</strong> or <strong>Phone &rarr; PC</strong>.
+            </p>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 4px;">
+              <button id="btnQuickCastScreen" class="btn btn-primary">
+                🖥️ Cast This Screen Now
+              </button>
+              <button id="btnQuickCastTest" class="btn">
+                🎨 Start Live Test Stream
+              </button>
+            </div>
+          </div>
+
+          <!-- WebRTC Video Element -->
+          <video id="remoteVideo" class="hidden" playsinline autoplay></video>
+
+          <!-- Fallback Live Frame / File / Canvas Stream Image -->
+          <img id="remoteCanvasImg" class="hidden" alt="Live Wireless Stream" />
+
+          <!-- Interactive Laser Pointer & Touch Overlay -->
+          <canvas id="pointerOverlay"></canvas>
+        </div>
+
+        <!-- Stage Bottom Control Bar -->
+        <div class="stage-toolbar">
+          <div class="toolbar-group">
+            <button id="btnToggleMute" class="btn" title="Mute / Unmute Audio">
+              🔊 Audio On
+            </button>
+            <button id="btnRotate" class="btn" title="Rotate Display (0° / 90° / 180° / 270°)">
+              🔄 Rotate
+            </button>
+            <button id="btnScaleMode" class="btn" title="Toggle Fit / Fill Screen">
+              📐 Fit
+            </button>
+            <button id="btnFlipMirror" class="btn" title="Flip Horizontally">
+              ↔️ Mirror
+            </button>
+            <button id="btnTogglePointer" class="btn" title="Enable Laser Pointer / Touch Overlay on Stream">
+              🎯 Laser Pointer
+            </button>
+          </div>
+
+          <div class="toolbar-group">
+            <button id="btnScreenshot" class="btn" title="Save Screenshot as PNG">
+              📸 Snapshot
+            </button>
+            <button id="btnPip" class="btn" title="Picture-in-Picture Floating Window">
+              🖼️ PiP
+            </button>
+            <button id="btnFullscreen" class="btn btn-primary" title="Enter Fullscreen Theater Mode">
+              ⛶ Fullscreen
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Broadcast / Sender Controls Card -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">🚀 Cast From This Device (Sender Mode)</h2>
+            <p class="card-desc">
+              Stream your screen, window, camera, media files, or live whiteboard to everyone in Room <strong id="castCardPinLabel">----</strong>.
+            </p>
+          </div>
+        </div>
+
+        <!-- Automatic Secure Context Notice for Remote Phones on HTTP -->
+        <div id="httpsNoticeBanner" class="https-banner hidden">
+          <div>
+            <strong>🔒 Want to share your Phone Screen or Camera to PC?</strong><br />
+            Browsers require an encrypted <code>HTTPS</code> link to unlock camera &amp; screen capture when connected via a local IP address.
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a id="btnSwitchToHttps" href="#" class="btn btn-primary" style="text-decoration: none;">
+              🔐 Open Secure HTTPS Cast Mode
+            </a>
+            <span style="font-size: 0.74rem; color: #fcd34d; align-self: center;">
+              (Tap "Advanced &rarr; Proceed" once on the self-signed local certificate)
+            </span>
+          </div>
+        </div>
+
+        <!-- Stream Quality & Audio Settings -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+          <div>
+            <label style="font-size: 0.76rem; color: var(--text-muted); display: block; margin-bottom: 4px;">
+              Video Resolution &amp; Frame Rate
+            </label>
+            <select id="selectQuality" class="select-input">
+              <option value="1080p60" selected>1080p Full HD @ 60 FPS (Ultra Smooth)</option>
+              <option value="1080p30">1080p Full HD @ 30 FPS (Balanced)</option>
+              <option value="720p60">720p HD @ 60 FPS (Low Latency)</option>
+              <option value="1440p30">1440p QHD / 4K @ 30 FPS (Crisp Text)</option>
+            </select>
+          </div>
+
+          <div>
+            <label style="font-size: 0.76rem; color: var(--text-muted); display: block; margin-bottom: 4px;">
+              Camera Facing (for Camera Mode)
+            </label>
+            <select id="selectCameraFacing" class="select-input">
+              <option value="environment">Rear / World Camera (Phone Back / Webcam)</option>
+              <option value="user">Front / Selfie Camera</option>
+            </select>
+          </div>
+
+          <div style="display: flex; align-items: flex-end; padding-bottom: 6px;">
+            <label class="checkbox-label">
+              <input id="chkIncludeAudio" type="checkbox" checked />
+              <span>Include System / Mic Audio</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 4 Casting Modes -->
+        <div class="cast-grid">
+          <button id="btnCastScreen" class="cast-tile">
+            <span class="cast-tile-icon">🖥️</span>
+            <span class="cast-tile-title">Cast Entire Screen / Window</span>
+            <span class="cast-tile-sub">Low-latency WebRTC P2P desktop, window, or browser tab + audio</span>
+          </button>
+
+          <button id="btnCastCamera" class="cast-tile">
+            <span class="cast-tile-icon">📷</span>
+            <span class="cast-tile-title">Cast Camera &amp; Mic</span>
+            <span class="cast-tile-sub">Use phone as a wireless webcam or live document camera on PC</span>
+          </button>
+
+          <button id="btnCastFileTrigger" class="cast-tile">
+            <span class="cast-tile-icon">🎬</span>
+            <span class="cast-tile-title">Cast Video or Photo File</span>
+            <span class="cast-tile-sub">Works on all phones even over HTTP — stream any local video or photo</span>
+          </button>
+
+          <button id="btnCastWhiteboard" class="cast-tile">
+            <span class="cast-tile-icon">🎨</span>
+            <span class="cast-tile-title">Live Whiteboard / Test Stream</span>
+            <span class="cast-tile-sub">Instant 30 FPS interactive drawing &amp; latency benchmark stream</span>
+          </button>
+        </div>
+
+        <input id="fileCastInput" type="file" accept="video/*,image/*" class="hidden" />
+
+        <!-- Interactive Whiteboard / Local File Preview Box (shown when active) -->
+        <div id="localCanvasBox" class="whiteboard-box hidden">
+          <div class="form-row">
+            <strong>🎨 Live Interactive Broadcast Pad (Draw below to stream in real time)</strong>
+            <div style="display: flex; gap: 6px;">
+              <button id="btnClearWhiteboard" class="btn">🧹 Clear</button>
+              <button id="btnStopBroadcastBottom" class="btn btn-danger">⏹ Stop</button>
+            </div>
+          </div>
+          <canvas id="localCastCanvas" width="1280" height="720"></canvas>
+          <video id="localFileVideo" class="hidden" controls playsinline loop></video>
+        </div>
+      </section>
+    </div>
+
+    <!-- Right Sidebar: QR Code + PIN Pairing, Active Wi-Fi Rooms, Clipboard & Native Miracast -->
+    <aside class="sidebar-column">
+      <!-- QR Code + PIN Pairing Card -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">📲 Instant Phone &harr; PC Pairing</h2>
+          <button id="btnNewPin" class="btn" title="Generate a fresh 4-digit Room PIN">
+            🎲 New PIN
+          </button>
+        </div>
+
+        <p class="card-desc">
+          Enter the same 4-digit PIN on any phone, tablet, or PC on your Wi-Fi, or scan the QR code below:
+        </p>
+
+        <div class="pairing-row">
+          <input
+            id="pinInput"
+            type="text"
+            maxlength="6"
+            class="text-input pin-input"
+            placeholder="4-Digit PIN"
+          />
+          <button id="btnJoinPin" class="btn btn-primary" style="white-space: nowrap;">
+            Join Room
+          </button>
+        </div>
+
+        <!-- Network Adapter / URL Mode Selector -->
+        <div class="form-row">
+          <label style="font-size: 0.75rem; color: var(--text-muted);">Wi-Fi IP:</label>
+          <select id="selectLanIp" class="select-input" style="width: auto; flex: 1;"></select>
+        </div>
+
+        <div class="form-row">
+          <label style="font-size: 0.75rem; color: var(--text-muted);">QR Mode:</label>
+          <select id="selectQrProtocol" class="select-input" style="width: auto; flex: 1;">
+            <option value="http" selected>HTTP — Instant Viewer / File Cast (No Cert Prompt)</option>
+            <option value="https">HTTPS — Phone Screen &amp; Camera Sender Mode</option>
+          </select>
+        </div>
+
+        <div class="qr-container">
+          <div class="qr-frame">
+            <img id="qrImage" src="/api/qr" alt="Scan to Pair" />
+          </div>
+          <div class="url-box">
+            <span id="shareUrlText" style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+              http://localhost:3000
+            </span>
+            <button id="btnCopyUrl" class="btn" style="padding: 4px 8px; font-size: 0.74rem;">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Connected Devices in Current Room -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">👥 Devices in Room (<span id="peerCountBadge">1</span>)</h2>
+        </div>
+        <div id="peerList" class="peer-list"></div>
+      </section>
+
+      <!-- Active Rooms Discovered on Local Wi-Fi -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">📡 Active Rooms on Wi-Fi</h2>
+        </div>
+        <p class="card-desc">
+          Click any active room discovered on your local network to join with 1 tap:
+        </p>
+        <div id="lobbyRoomList" class="room-list"></div>
+      </section>
+
+      <!-- Instant Clipboard / Text / Link Beam between Phone & PC -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">⚡ Instant Text / URL Beam</h2>
+        </div>
+        <div class="pairing-row">
+          <input
+            id="clipboardInput"
+            type="text"
+            class="text-input"
+            placeholder="Paste link or text to beam to room..."
+          />
+          <button id="btnSendClipboard" class="btn btn-primary">Send</button>
+        </div>
+        <div id="clipboardHistory" class="peer-list"></div>
+      </section>
+
+      <!-- Native Windows Miracast / Project Hardware Bridge -->
+      <section id="winMiracastCard" class="card">
+        <div class="card-header">
+          <h2 class="card-title">🪟 Windows Native Miracast Bridge</h2>
+        </div>
+        <p class="card-desc">
+          Also want to use hardware Wi-Fi Direct Miracast? Launch Windows' native Wireless Display settings with one click:
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button id="btnWinConnect" class="btn">
+            📺 Open Windows Cast / Wireless Displays
+          </button>
+          <button id="btnWinProject" class="btn">
+            ⚙️ Open "Projecting to this PC" Settings
+          </button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
