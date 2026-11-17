@@ -1,32 +1,33 @@
 # MiraCastR (`miracasr`)
 
-**100% Free, Cross-Platform Phone $\leftrightarrow$ PC Wireless Display & Screen Mirroring over Local Wi-Fi.**
+**100% Free, Cross-Platform Phone $\leftrightarrow$ PC Wireless Display & Screen Mirroring (Web + Netlify Ready).**
 
-Zero-install on phones, tablets, and secondary PCs — pair in seconds via **QR Code**, **4-Digit PIN**, or **1-Tap Local Wi-Fi Room Discovery**.
+Zero-install on phones, tablets, and PCs — pair in seconds via **QR Code** or **4-Digit Room Code**.
 
 ## ✨ Features
 
-- **Instant QR Code & 4-Digit PIN Pairing**: Automatically detects your active LAN/Wi-Fi IPv4 interface and generates a scannable QR code.
-- **Bi-Directional Casting (PC $\leftrightarrow$ Phone)**:
-  - **Screen / Window / Tab Mirroring**: Low-latency WebRTC P2P streaming up to **1080p/1440p @ 60 FPS** with system/tab audio.
-  - **Camera & Mic Casting**: Use your phone as a wireless webcam or document camera on your PC (supports front & rear cameras).
-  - **Local Video & Photo File Casting**: Stream local media files from any phone or PC over plain HTTP.
-  - **Live Interactive Whiteboard & 60 FPS Test Stream**: Built-in drawing pad and latency benchmark clock.
-- **Wireless Display Stage Controls**:
-  - **Rotate (`0°` / `90°` / `180°` / `270°`)**, **Fit / Fill**, **Horizontal Mirror**, **Fullscreen**, **Picture-in-Picture (PiP)**, and **PNG Screenshot Capture**.
-  - **Live Laser Pointer Overlay**: Highlight areas on the mirrored screen in real time across all connected devices.
-  - **Instant Text / URL Beam**: Share links and clipboard snippets across devices in the room.
-  - **Windows Native Miracast Bridge**: Quick-launch shortcuts for Windows Wireless Display and *Projecting to this PC* settings.
+- **Simple 2-Step Bi-Directional Room Pairing**:
+  - Scan the QR code with your phone or enter the 4-digit Room Code on your second device.
+  - Once linked (`🟢 Connected`), **either device can cast to the other** in any order!
+- **Triple-Redundant Connection Engine**:
+  - **Cloud WSS Room Bus (`MQTT over WSS`)**: Connects devices in `< 200ms` on **Netlify** or any static HTTPS host without firewall blocks or stale ID locks.
+  - **WebRTC P2P Media Calls (`PeerJS`)**: Streams high-FPS video + audio directly between devices.
+  - **Automatic Live Frame Stream Backup + Local WebSocket (`server.js`)**: Guarantees the picture always displays even behind strict firewalls or offline local Wi-Fi.
+- **4 Built-In Casting Modes**:
+  1. **🖥️ Share Screen / Window / Tab** *(Desktop PCs & Macs with system/tab audio)*
+  2. **📷 Share Camera & Mic** *(All Phones & PCs — includes front/back camera switcher)*
+  3. **🎬 Cast Video or Photo** *(All Phones & PCs — stream any video or photo from your gallery)*
+  4. **🎨 Live Draw / Interactive Canvas** *(All Phones & PCs — draw with your finger or mouse in real time)*
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Local)
 
 ```bash
 npm install
 npm start
 ```
 
-Or on Windows, double-click **`start-miracastr.bat`**.
+Or on Windows, double-click **`start-miracastr.bat`**, then open **[http://localhost:3000](http://localhost:3000)**.
 
-- **Local PC Dashboard**: `http://localhost:3000`
-- **LAN Quick Viewer (HTTP)**: `http://<YOUR_WIFI_IP>:3000`
-- **LAN Secure Sender Mode (HTTPS)**: `https://<YOUR_WIFI_IP>:3443`
+## ☁️ Deploying to Netlify
+
+This repository includes [`netlify.toml`](./netlify.toml) pre-configured with `publish = "public"` and SPA routing — simply connect your GitHub repository (`4dopt/miracasr`) to Netlify and deploy!
