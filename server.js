@@ -578,7 +578,7 @@ async function startServer() {
   const wssHttp = new WebSocketServer({ server: httpServer });
   attachSignalingServer(wssHttp);
 
-  httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
+  httpServer.listen(HTTP_PORT, () => {
     console.log(`\n============================================================`);
     console.log(`  MiraCastR — Free Wireless Screen Mirroring & Display Hub`);
     console.log(`============================================================`);
@@ -619,7 +619,7 @@ async function startServer() {
     const wssHttps = new WebSocketServer({ server: httpsServer });
     attachSignalingServer(wssHttps);
 
-    httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+    httpsServer.listen(HTTPS_PORT, () => {
       console.log(`  LAN Secure Cast    : https://${primaryIp}:${HTTPS_PORT}`);
       console.log(`============================================================\n`);
     });
